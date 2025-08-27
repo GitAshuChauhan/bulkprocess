@@ -1,52 +1,52 @@
-﻿using System.IO.Compression;
-using Azure.Storage.Blobs;
-using Microsoft.Extensions.Logging;
+﻿using Azure.Storage.Blobs;
+using System.IO.Compression;
+using System.Threading;
+using System.Threading.Tasks;
+using Worker.Abstractions;
+using Worker.Infrastructure;
 
 namespace Worker.Services
 {
     public class ZipExtractor : IZipExtractor
     {
-        private readonly BlobServiceClient _bsc;
-        private readonly ILogger<ZipExtractor> _log;
+        private readonly ResiliencePolicyFactory _policies;
+        private readonly ILogger<ZipExtractor> _logger;
+        private readonly JobLogger _jobLogger;
 
-        public ZipExtractor(IAzureClientFactory fac, ILogger<ZipExtractor> log)
+        public ZipExtractor(ResiliencePolicyFactory policies, ILogger<ZipExtractor> logger, JobLogger jobLogger)
         {
-            _bsc = fac.CreateBlobServiceClient();
-            _log = log;
+            _policies = policies; _logger = logger; _jobLogger = jobLogger;
         }
 
-        public async Task<BlobClient> ExtractZipToStageAsync(string stageContainer, string zipBlobPath, string targetPrefix, string metadataFileName, CancellationToken ct)
+        public async Task ExtractToContainerAsync(BlobClient zipBlob, BlobContainerClient stageContainer, string correlationId, CancellationToken ct)
         {
-            var container = _bsc.GetBlobContainerClient(stageContainer);
-            await container.CreateIfNotExistsAsync(cancellationToken: ct);
-            var zipBlob = container.GetBlobClient(zipBlobPath);
-
-            BlobClient? metadataBlob = null;
-            // stream the zip blob and extract entry-by-entry to stage/{targetPrefix}/<entry>
-            await using var zipStream = await zipBlob.OpenReadAsync(cancellationToken: ct);
-            using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read, leaveOpen: false);
-
-            foreach (var entry in archive.Entries.Where(e => !string.IsNullOrEmpty(e.Name)))
+            _logger.LogInformation("Extracting zip {Zip} for correlation {Correlation}", zipBlob.Name, correlationId);
+            if (!Guid.TryParse(correlationId, out var g))
             {
-                ct.ThrowIfCancellationRequested();
-                var normalized = entry.FullName.Replace("\\", "/");
-                var destPath = string.IsNullOrEmpty(targetPrefix) ? normalized : $"{targetPrefix.TrimEnd('/')}/{normalized}";
-                var destBlob = container.GetBlobClient(destPath);
-
-                _log.LogDebug("Extracting entry {Entry} -> {Dest}", entry.FullName, destPath);
-                await using var es = entry.Open();
-                // stream entry directly to blob
-                await destBlob.UploadAsync(es, overwrite: true, cancellationToken: ct);
-
-                if (string.Equals(entry.Name, metadataFileName, StringComparison.OrdinalIgnoreCase))
-                {
-                    metadataBlob = destBlob;
-                }
+                _logger.LogWarning("CorrelationId is not a GUID: {C}", correlationId);
+            }
+            else
+            {
+                await _jobLogger.LogInfoAsync(g, "Start extracting zip {Zip}", zipBlob.Name);
             }
 
-            if (metadataBlob == null) throw new FileNotFoundException($"Metadata file {metadataFileName} not found in ZIP {zipBlobPath}");
-            _log.LogInformation("Extraction finished. Metadata blob: {Uri}", metadataBlob.Uri);
-            return metadataBlob;
+            using var stream = await _policies.BlobRetryPolicy.ExecuteAsync(async () => await zipBlob.OpenReadAsync(cancellationToken: ct));
+            using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
+
+            foreach (var entry in archive.Entries)
+            {
+                if (string.IsNullOrEmpty(entry.Name)) continue;
+                var destName = $"{correlationId}/{entry.FullName.Replace("\\\\", "/")}";
+                var stageBlob = stageContainer.GetBlobClient(destName);
+                await _policies.BlobRetryPolicy.ExecuteAsync(async () =>
+                {
+                    await using var es = entry.Open();
+                    await stageBlob.UploadAsync(es, overwrite: true, cancellationToken: ct);
+                });
+                if (Guid.TryParse(correlationId, out var g2)) await _jobLogger.LogInfoAsync(g2, "Extracted entry {Entry} to {Dest}", entry.FullName, destName);
+            }
+            if (Guid.TryParse(correlationId, out var g3)) await _jobLogger.LogInfoAsync(g3, "Zip extracted for {Correlation}", correlationId);
+            _logger.LogInformation("Zip extracted for {Correlation}", correlationId);
         }
     }
 }

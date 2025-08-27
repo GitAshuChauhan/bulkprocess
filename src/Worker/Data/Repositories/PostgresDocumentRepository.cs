@@ -1,82 +1,116 @@
 ﻿using Microsoft.EntityFrameworkCore;
-using Worker.Resilience;
-using Worker.Data;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using Worker.Abstractions;
+using Worker.Data.Entities;
+using Worker.Infrastructure;
+using Worker.Telemetry;
 
 namespace Worker.Data.Repositories
 {
     public class PostgresDocumentRepository : IDocumentRepository
     {
-        private readonly DataContext _db;
+        private readonly DataContext _ctx;
         private readonly ResiliencePolicyFactory _policies;
 
-        public PostgresDocumentRepository(DataContext db, ResiliencePolicyFactory policies)
+        public PostgresDocumentRepository(DataContext ctx, ResiliencePolicyFactory policies)
         {
-            _db = db; _policies = policies;
+            _ctx = ctx;
+            _policies = policies;
         }
 
-        public async Task<MetadataJob> CreateJobAsync(string sourcePath, CancellationToken ct)
+        public async Task<MetadataJob> GetOrCreateMetadataJobAsync(string correlationId, string sourcePath, string country, string appName)
         {
-            return await _policies.DbRetryPolicy.ExecuteAsync(async token =>
+            var existing = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.MetadataJobs.FirstOrDefaultAsync(j => j.CorrelationId == correlationId));
+            if (existing != null)
             {
-                var job = new MetadataJob { Id = Guid.NewGuid(), SourcePath = sourcePath, Status = "Processing", CreatedAt = DateTimeOffset.UtcNow };
-                _db.MetadataJobs.Add(job);
-                await _db.SaveChangesAsync(token);
-                return job;
-            }, ct);
-        }
-
-        public async Task BulkInsertDocumentsAsync(IEnumerable<DocumentEntity> docs, int batchSize, CancellationToken ct)
-        {
-            var chunks = docs.Select((v, i) => new { v, i })
-                             .GroupBy(x => x.i / Math.Max(1, batchSize))
-                             .Select(g => g.Select(x => x.v).ToList());
-
-            foreach (var chunk in chunks)
-            {
-                await _policies.DbRetryPolicy.ExecuteAsync(async token =>
-                {
-                    _db.Documents.AddRange(chunk);
-                    await _db.SaveChangesAsync(token);
-                }, ct);
+                var changed = false;
+                if (string.IsNullOrWhiteSpace(existing.SourcePath) && !string.IsNullOrWhiteSpace(sourcePath)) { existing.SourcePath = sourcePath; changed = true; }
+                if (string.IsNullOrWhiteSpace(existing.Country) && !string.IsNullOrWhiteSpace(country)) { existing.Country = country; changed = true; }
+                if (string.IsNullOrWhiteSpace(existing.AppName) && !string.IsNullOrWhiteSpace(appName)) { existing.AppName = appName; changed = true; }
+                if (changed) await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync());
+                return existing;
             }
+
+            var job = new MetadataJob { Id = Guid.NewGuid(), CorrelationId = correlationId, SourcePath = sourcePath, Country = country, AppName = appName, CreatedAt = DateTimeOffset.UtcNow, Status = "Pending" };
+            await _policies.DbRetryPolicy.ExecuteAsync(async () => { _ctx.MetadataJobs.Add(job); await _ctx.SaveChangesAsync(); });
+            return job;
         }
 
-        public Task<List<DocumentEntity>> GetPendingDocumentsAsync(Guid jobId, int take, CancellationToken ct)
+        public async Task EnsureJobStartedAsync(Guid jobId)
         {
-            return _db.Documents.AsNoTracking()
-                .Where(d => d.JobId == jobId && d.Status == DocumentStatus.Pending)
-                .OrderBy(d => d.Id)
-                .Take(take)
-                .ToListAsync(ct);
+            var job = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.MetadataJobs.FindAsync(jobId));
+            if (job == null) return;
+            if (job.StartedAt == null) { job.StartedAt = DateTimeOffset.UtcNow; job.Status = "Processing"; await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync()); }
         }
 
-        public async Task MarkProcessingAsync(Guid id, CancellationToken ct)
+        public async Task MarkJobCompletedAsync(Guid jobId)
         {
-            await _db.Documents.Where(d => d.Id == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DocumentStatus.Processing)
-                                         .SetProperty(d => d.LastUpdated, DateTimeOffset.UtcNow), ct);
+            var job = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.MetadataJobs.FindAsync(jobId));
+            if (job == null) return;
+            job.CompletedAt = DateTimeOffset.UtcNow; job.Status = "Completed"; await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync());
         }
 
-        public async Task MarkSuccessAsync(Guid id, CancellationToken ct)
+        public async Task MarkJobFailedAsync(Guid jobId, string reason)
         {
-            await _db.Documents.Where(d => d.Id == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DocumentStatus.Success)
-                                         .SetProperty(d => d.Error, default(string))
-                                         .SetProperty(d => d.LastUpdated, DateTimeOffset.UtcNow), ct);
+            var job = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.MetadataJobs.FindAsync(jobId));
+            if (job == null) return;
+            job.CompletedAt = DateTimeOffset.UtcNow; job.Status = "Failed"; job.FailureReason = reason; await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync());
         }
 
-        public async Task MarkFailedAsync(Guid id, string error, CancellationToken ct)
+        public async Task AddDocumentsAsync(IEnumerable<DocumentEntity> docs)
         {
-            await _db.Documents.Where(d => d.Id == id)
-                .ExecuteUpdateAsync(s => s.SetProperty(d => d.Status, DocumentStatus.Failed)
-                                         .SetProperty(d => d.Error, error)
-                                         .SetProperty(d => d.LastUpdated, DateTimeOffset.UtcNow), ct);
+            await _policies.DbRetryPolicy.ExecuteAsync(async () =>
+            {
+                foreach (var d in docs)
+                {
+                    var exists = await _ctx.Documents.AnyAsync(x => x.JobId == d.JobId && x.FileGuid == d.FileGuid);
+                    if (!exists) _ctx.Documents.Add(d);
+                }
+                await _ctx.SaveChangesAsync();
+            });
         }
 
-        public async Task SetJobStatusAsync(Guid jobId, string status, CancellationToken ct)
+        public async Task<(IReadOnlyList<DocumentEntity> Docs, int TotalPending)> GetPendingByJobBatchAsync(Guid jobId, int skip, int take, CancellationToken ct)
         {
-            await _db.MetadataJobs.Where(j => j.Id == jobId)
-                .ExecuteUpdateAsync(s => s.SetProperty(j => j.Status, status), ct);
+            var query = _ctx.Documents.AsNoTracking().Where(d => d.JobId == jobId && (d.Status == DocumentStatus.Pending || d.Status == DocumentStatus.Failed)).OrderBy(d => d.Id);
+            var total = await _policies.DbRetryPolicy.ExecuteAsync(async () => await query.CountAsync(ct));
+            var page = await _policies.DbRetryPolicy.ExecuteAsync(async () => await query.Skip(skip).Take(take).ToListAsync(ct));
+            return (page, total);
+        }
+
+        public async Task UpdateDocumentStatusAsync(Guid id, DocumentStatus status, string? error = null)
+        {
+            var doc = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.Documents.FindAsync(id));
+            if (doc == null) return;
+            doc.Status = status; doc.Error = error; doc.LastUpdated = DateTimeOffset.UtcNow; await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync());
+        }
+
+        public async Task IncrementJobCountersAsync(Guid jobId, bool success)
+        {
+            var job = await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.MetadataJobs.FindAsync(jobId));
+            if (job == null) return;
+            if (success) job.SuccessDocuments += 1; else job.FailedDocuments += 1;
+            await _policies.DbRetryPolicy.ExecuteAsync(async () => await _ctx.SaveChangesAsync());
+        }
+
+        public async Task AddProductionRecordWithTagsAsync(Guid jobId, string fileGuid, string blobName, string extension, IDictionary<string, string> tags, CancellationToken ct)
+        {
+            await _policies.DbRetryPolicy.ExecuteAsync(async () =>
+            {
+                var prodDoc = new ProductionDocumentEntity { Id = Guid.NewGuid(), JobId = jobId, FileGuid = fileGuid, BlobName = blobName, Extension = extension, CreatedAt = DateTimeOffset.UtcNow };
+                _ctx.ProductionDocuments.Add(prodDoc);
+                await _ctx.SaveChangesAsync(ct);
+                if (tags.Count > 0)
+                {
+                    var tagRows = tags.Select(kv => new ProductionDocumentTag { Id = Guid.NewGuid(), ProductionDocumentId = prodDoc.Id, TagKey = kv.Key, TagValue = kv.Value });
+                    _ctx.ProductionDocumentTags.AddRange(tagRows);
+                    await _ctx.SaveChangesAsync(ct);
+                }
+            });
         }
     }
 }
