@@ -1,5 +1,6 @@
 ﻿using Azure.Messaging.ServiceBus;
 using Azure.Storage.Blobs;
+using Npgsql.Replication.PgOutput.Messages;
 using System.Text.Json;
 using Worker.Abstractions;
 using Worker.Configuration;
@@ -12,115 +13,109 @@ namespace Worker.Workers
 {
     public class ServiceBusWorker : BackgroundService
     {
-        private readonly ServiceBusProcessor _processor;
-        private readonly IConfiguration _cfg;
-        private readonly IDocumentRepository _repo;
-        private readonly IZipUploader _uploader;
-        private readonly IMetadataJobProcessor _jobProcessor;
-        private readonly ResiliencePolicyFactory _policies;
+        private readonly ServiceBusClient _client;
+        private readonly IZipHandler _ziphandler;
+        private readonly ICsvStager _csvStager;
+        private readonly IStagingRepository _stagingRepo;
+        private readonly ILogger<ServiceBusWorker> _logger;
         private readonly IJobLogger _jobLogger;
-        private readonly BlobServiceClient _bsc;
+        private readonly ResiliencePolicyFactory _policies;
 
-        public ServiceBusWorker(ServiceBusClient sbClient, IConfiguration cfg, IDocumentRepository repo,
-                                IZipUploader uploader, IMetadataJobProcessor jobProcessor, ResiliencePolicyFactory policies,
-                                BlobServiceClient bsc, IJobLogger jobLogger)
+        private readonly IJobAlertService _alerts;
+        private readonly IDocumentProcessor _docprocessor;
+        private ServiceBusProcessor _sbprocessorClient;
+        
+        public ServiceBusWorker(ServiceBusClient client, ServiceBusProcessor sbprocessor, ICsvStager csvStager,IJobLogger joblogger, ILogger<ServiceBusWorker> logger, IZipHandler ziphandler, IStagingRepository stagingrepo, IJobAlertService alerts, IDocumentProcessor processor, ResiliencePolicyFactory policies)
         {
-            _cfg = cfg; _repo = repo; _uploader = uploader; _jobProcessor = jobProcessor; _policies = policies; _bsc = bsc; _jobLogger = jobLogger;
-
-            var queueName = cfg["ServiceBus:QueueName"];
-            var maxRenewHours = int.TryParse(cfg["ServiceBus:MaxAutoRenewHours"], out var h) ? h : 6;
-
-            _processor = sbClient.CreateProcessor(queueName, new ServiceBusProcessorOptions
-            {
-                AutoCompleteMessages = false,
-                MaxConcurrentCalls = 1,
-                MaxAutoLockRenewalDuration = TimeSpan.FromHours(maxRenewHours)
-            });
-
-            _processor.ProcessMessageAsync += OnMessageAsync;
-            _processor.ProcessErrorAsync += OnErrorAsync;
+            _client = client; 
+            _sbprocessorClient = sbprocessor; 
+            _csvStager = csvStager; 
+            _jobLogger = joblogger; 
+            _logger = logger;
+            _ziphandler = ziphandler;
+            _stagingRepo = stagingrepo; 
+            _alerts = alerts; 
+            _docprocessor = processor;
+            _policies = policies;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            await _processor.StartProcessingAsync(stoppingToken);
-            try { await Task.Delay(Timeout.Infinite, stoppingToken); }
-            catch (OperationCanceledException) { }
-            finally { await _processor.StopProcessingAsync(stoppingToken); }
+            //var options = new ServiceBusProcessorOptions
+            //{
+            //    MaxConcurrentCalls = 1,
+            //    MaxAutoLockRenewalDuration = TimeSpan.FromHours(4),
+            //    AutoCompleteMessages = false
+            //};
+           // _sbprocessorClient = _client.CreateProcessor(queue, options);
+            _sbprocessorClient.ProcessMessageAsync += OnMessageAsync;
+            _sbprocessorClient.ProcessErrorAsync += args => { _logger.LogError(args.Exception, "SB Error"); return Task.CompletedTask; };
+            await _sbprocessorClient.StartProcessingAsync(stoppingToken);
+            _logger.LogInformation("ServiceBusProcessor started");
         }
 
         private async Task OnMessageAsync(ProcessMessageEventArgs args)
         {
-            InboundMessage dto;
-            try { dto = JsonSerializer.Deserialize<InboundMessage>(args.Message.Body.ToString())!; }
-            catch (Exception jex)
-            {
-                //_logger.LogError(jex, "Malformed message; DLQ. Id={MessageId}", args.Message.MessageId);
-                await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () =>
-                    await args.DeadLetterMessageAsync(args.Message, "InvalidMessage", jex.Message));
-                return;
-            }
-
-            var correlationId = dto.FolderName;
-            var job = await _repo.GetOrCreateMetadataJobAsync(correlationId, dto.MftPath, dto.Country, dto.AppName);
-
+            var ct = args.CancellationToken;
+            IngestMessage? msg;
             try
             {
-                //await _jobLogger.LogInfoAsync(job.Id, "Processing message for correlation {Correlation}", correlationId);
-                await _jobLogger.LogJobStartAsync(job.Id, correlationId, dto.AppName, args.CancellationToken);
-
-                //var zipBlobName = await _uploader.UploadZipFromMftAsync(job.Id, dto.MftPath, args.CancellationToken);
-                var uploadResult = await _uploader.UploadZipFromMftAsync(job.Id, correlationId, dto.MftPath, args.CancellationToken);
-
-                if (uploadResult.Skipped)
-                {
-                    await _jobLogger.LogInfoAsync(job.Id, $"ZIP already staged at {uploadResult.BlobName}, skipping upload.", args.CancellationToken);
-                }
-                else
-                {
-                    await _jobLogger.LogInfoAsync(job.Id, $"Uploaded ZIP to stage at {uploadResult.BlobName}.", args.CancellationToken);
-                }
-
-                var stage = _bsc.GetBlobContainerClient(_cfg["Storage:StageContainer"]);
-                await _policies.BlobRetryPolicy.ExecuteAsync(async () => await stage.CreateIfNotExistsAsync(cancellationToken: args.CancellationToken));
-
-                await _jobProcessor.RunAsync(job.Id, uploadResult.BlobName, dto.Country, dto.AppName, args.CancellationToken);
-
-                await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () => await args.CompleteMessageAsync(args.Message));
-                
-                await _jobLogger.LogJobCompletionAsync(job.Id, true, null, args.CancellationToken);
-
-                await _jobLogger.LogInfoAsync(job.Id, "Message processing complete");
+                msg = JsonSerializer.Deserialize<IngestMessage>(args.Message.Body.ToString(), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
+                if (msg == null) throw new Exception("invalid message");
             }
             catch (Exception ex)
             {
-                //_logger.LogError(ex, "Processing failed for Job {JobId}, Correlation {CorrelationId}. DeliveryCount={DeliveryCount}",
-                //    job.Id, correlationId, args.Message.DeliveryCount);
-
-                var maxDelivery = int.TryParse(_cfg["ServiceBus:MaxDeliveryCount"], out var md) ? md : 10;
-                if (args.Message.DeliveryCount + 1 >= maxDelivery)
-                {
-                    //await _jobLogger.MarkJobFailedAsync(job.Id, $"Max deliveries exceeded: {ex.Message}");
-                    await _repo.MarkJobFailedAsync(job.Id, ex.Message);
-
-                    await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () =>
-                        await args.DeadLetterMessageAsync(args.Message, "MaxDeliveryExceeded", ex.Message));
-                }
-                else
-                {
-                    await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () => await args.AbandonMessageAsync(args.Message));
-                }
-
-                await _jobLogger.LogJobCompletionAsync(job.Id, false, ex.Message, args.CancellationToken);
+                _logger.LogError(ex, "Invalid message - deadletter");
+                await args.DeadLetterMessageAsync(args.Message, "InvalidMessage", ex.Message, ct);
+                return;
             }
-        }
 
-        private Task OnErrorAsync(ProcessErrorEventArgs e)
+            var job = await _stagingRepo.GetOrCreateJobAsync(msg.CorrelationId, msg.MftZipPath, ct);
+            await _stagingRepo.SetJobStartedAsync(job.Id, ct);
+            _alerts.TrackJobStarted(job.Id, msg.ClientId);
+
+            try
+            {
+                var upload = await _ziphandler.UploadZipFromMftAsync(job.Id, msg.CorrelationId, msg.MftZipPath, ct);
+                if (!upload.Skipped)
+                {
+                    _logger.LogInformation("Zip uploaded");
+                }
+
+                await using var csvStream = await _ziphandler.StageZipAndExtractCsvAsync(job, msg.CorrelationId, ct);
+
+                // Level-1 header validation & stage rows
+                await _csvStager.StageCsvAsync(csvStream, job.Id, args.CancellationToken);
+
+                // Process job documents in parallel inside the pod
+                await _docprocessor.ProcessJobAsync(job.Id, args.CancellationToken);
+
+                // mark complete (placeholder)
+                //await _repo.SetJobCompletedAsync(job.Id, 0, 0, null, ct);
+                _alerts.TrackJobCompleted(job.Id, true);
+                await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () => await args.CompleteMessageAsync(args.Message, ct));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Processing failed");
+                _alerts.TrackJobCompleted(job.Id, false, ex.Message);
+
+                // Let built-in MaxDelivery count handle redelivery; if exceeded, SB will move to DLQ
+                //by defuault max delivery count is 10.We can change it in the azure portal.
+                await _policies.ServiceBusRetryPolicy.ExecuteAsync(async () => await args.AbandonMessageAsync(args.Message, cancellationToken: ct));
+            }
+        }      
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
         {
-           // _logger.LogError(e.Exception, "ServiceBus error Entity={Entity} Source={Source}", e.EntityPath, e.ErrorSource);
-
-            // ServiceBus SDK errors (no job context) - platform logging can pick these up
-            return Task.CompletedTask;
+            if (_sbprocessorClient != null)
+            {
+                await _sbprocessorClient.StopProcessingAsync(cancellationToken);
+                await _sbprocessorClient.DisposeAsync();
+            }
+            await base.StopAsync(cancellationToken);
         }
+
+        private sealed record IngestMessage(Guid CorrelationId, string MftZipPath, string? ClientId);
     }
 }

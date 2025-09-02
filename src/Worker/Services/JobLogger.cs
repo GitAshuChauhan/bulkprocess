@@ -8,22 +8,24 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Worker.Abstractions;
 using Worker.Data;
+using Worker.Data.DbContext;
 using Worker.Data.Entities;
+using Worker.Data.Entities.staging;
 
 namespace Worker.Services
 {
     public class JobLogger : IJobLogger
     {
-        private readonly DataContext _context;
+        private readonly StagingDbContext _context;
         private readonly ILogger<JobLogger> _logger;
 
-        public JobLogger(DataContext context, ILogger<JobLogger> logger)
+        public JobLogger(StagingDbContext context, ILogger<JobLogger> logger)
         {
             _context = context;
             _logger = logger;
         }
 
-        public async Task LogJobStartAsync(Guid jobId, string correlationId, string clientId, CancellationToken cancellationToken = default)
+        public async Task LogJobStartAsync(Guid jobId, Guid correlationId, Guid clientId, CancellationToken cancellationToken = default)
         {
             var job = await _context.MetadataJobs.FindAsync(new object[] { jobId }, cancellationToken);
             if (job != null)
@@ -52,10 +54,10 @@ namespace Worker.Services
 
         public async Task LogDocumentStartAsync(Guid jobId, Guid documentId, string filePath, CancellationToken cancellationToken = default)
         {
-            var doc = await _context.Documents.FindAsync(new object[] { documentId }, cancellationToken);
+            var doc = await _context.DocumentStagingRaws.FindAsync(new object[] { documentId }, cancellationToken);
             if (doc != null)
             {
-                doc.Status = DocumentStatus.Processing;
+                doc.Status = StagingRowStatus.Processing;
                 doc.LastUpdated = DateTimeOffset.UtcNow;
                 await _context.SaveChangesAsync(cancellationToken);
             }
@@ -64,10 +66,10 @@ namespace Worker.Services
 
         public async Task LogDocumentCompletionAsync(Guid jobId, Guid documentId, bool success, string? error = null, CancellationToken ct = default)
         {
-            var doc = await _context.Documents.FindAsync(new object[] { documentId }, ct);
+            var doc = await _context.DocumentStagingRaws.FindAsync(new object[] { documentId }, ct);
             if (doc != null)
             {
-                doc.Status = success ? DocumentStatus.Success : DocumentStatus.Failed;
+                doc.Status = success ? StagingRowStatus.Succeeded : StagingRowStatus.Failed;
                 doc.Error = error;
                 doc.LastUpdated = DateTimeOffset.UtcNow;
                 await _context.SaveChangesAsync(ct);
@@ -89,6 +91,12 @@ namespace Worker.Services
         public Task LogInfoAsync(Guid jobId, string message, CancellationToken ct = default)
         {
             _logger.LogInformation("[Job {JobId}] {Message}", jobId, message);
+            return Task.CompletedTask;
+        }
+
+        public Task LogErrorAsync(Guid jobId, string message, Exception? ex = null, CancellationToken ct = default)
+        {
+            _logger.LogError(ex, "[Job {JobId}] {Message}", jobId, message);
             return Task.CompletedTask;
         }
     }

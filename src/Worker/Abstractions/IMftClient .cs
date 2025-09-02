@@ -9,5 +9,6 @@ namespace Worker.Abstractions
     public interface IMftClient : IAsyncDisposable
     {
         Task<Stream> OpenReadAsync(string remotePath, CancellationToken ct = default);
+        Task<bool> ExistsAsync(string remotePath, CancellationToken ct = default);
     }
 }

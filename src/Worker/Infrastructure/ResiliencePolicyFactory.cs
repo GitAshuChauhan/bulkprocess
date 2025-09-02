@@ -5,6 +5,7 @@ using Polly;
 using Polly.Contrib.WaitAndRetry;
 using Renci.SshNet.Common;
 using System;
+using System.Net.Sockets;
 
 namespace Worker.Infrastructure
 {
@@ -32,6 +33,7 @@ namespace Worker.Infrastructure
             SftpRetryPolicy = Policy.Handle<SshException>()
                 .Or<SftpPathNotFoundException>()
                 .Or<TimeoutException>()
+                .Or<SocketException>()
                 .WaitAndRetryAsync(delays, (ex, ts, r, ctx) => logger.LogWarning(ex, "SFTP transient, retry {Retry} after {Delay}", r, ts));
         }
     }

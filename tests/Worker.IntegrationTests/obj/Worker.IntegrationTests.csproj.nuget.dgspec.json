@@ -51,6 +51,18 @@
         "net9.0": {
           "targetAlias": "net9.0",
           "dependencies": {
+            "AspNetCore.HealthChecks.Azure.Storage.Blobs": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
+            "AspNetCore.HealthChecks.AzureServiceBus": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
+            "AspNetCore.HealthChecks.NpgSql": {
+              "target": "Package",
+              "version": "[9.0.0, )"
+            },
             "Azure.Identity": {
               "target": "Package",
               "version": "[1.15.0, )"
@@ -71,6 +83,10 @@
               "target": "Package",
               "version": "[12.25.0, )"
             },
+            "Microsoft.ApplicationInsights": {
+              "target": "Package",
+              "version": "[2.23.0, )"
+            },
             "Microsoft.EntityFrameworkCore": {
               "target": "Package",
               "version": "[9.0.8, )"
@@ -80,6 +96,14 @@
               "version": "[1.12.0, )"
             },
             "Microsoft.Extensions.Caching.Memory": {
+              "target": "Package",
+              "version": "[9.0.8, )"
+            },
+            "Microsoft.Extensions.DependencyInjection": {
+              "target": "Package",
+              "version": "[9.0.8, )"
+            },
+            "Microsoft.Extensions.Diagnostics.HealthChecks": {
               "target": "Package",
               "version": "[9.0.8, )"
             },
@@ -95,6 +119,10 @@
               "target": "Package",
               "version": "[9.0.4, )"
             },
+            "OpenTelemetry.Exporter.Console": {
+              "target": "Package",
+              "version": "[1.12.0, )"
+            },
             "OpenTelemetry.Extensions.Hosting": {
               "target": "Package",
               "version": "[1.12.0, )"
@@ -109,7 +137,7 @@
             },
             "Polly": {
               "target": "Package",
-              "version": "[8.6.2, )"
+              "version": "[8.6.3, )"
             },
             "Polly.Contrib.WaitAndRetry": {
               "target": "Package",

@@ -3,16 +3,12 @@
   "WorkspaceRootPath": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|c:\\users\\bobyc\\onedrive\\desktop\\dmsrnd\\bulkupload\\src\\worker\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|solutionrelative:src\\worker\\program.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|c:\\users\\bobyc\\onedrive\\desktop\\dmsrnd\\bulkupload\\src\\worker\\workers\\servicebusworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|solutionrelative:src\\worker\\workers\\servicebusworker.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|c:\\users\\bobyc\\onedrive\\desktop\\dmsrnd\\bulkupload\\src\\worker\\data\\repositories\\postgresdocumentrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|solutionrelative:src\\worker\\data\\repositories\\postgresdocumentrepository.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|c:\\users\\bobyc\\onedrive\\desktop\\dmsrnd\\bulkupload\\src\\worker\\data\\entities\\models.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
-      "RelativeMoniker": "D:0:0:{AE64A4C5-46BC-4EA3-BF0B-BADC97E0FF5E}|src\\Worker\\Worker.csproj|solutionrelative:src\\worker\\data\\entities\\models.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
   "DocumentGroupContainers": [
@@ -26,45 +22,32 @@
           "Children": [
             {
               "$type": "Bookmark",
-              "Name": "ST:0:0:{aa2115a1-9712-457b-9047-dbb71ca2cdd2}"
+              "Name": "ST:128:0:{116d2292-e37d-41cd-a077-ebacac4c8cc4}"
             },
             {
               "$type": "Document",
               "DocumentIndex": 0,
-              "Title": "ServiceBusWorker.cs",
-              "DocumentMoniker": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Workers\\ServiceBusWorker.cs",
-              "RelativeDocumentMoniker": "src\\Worker\\Workers\\ServiceBusWorker.cs",
-              "ToolTip": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Workers\\ServiceBusWorker.cs",
-              "RelativeToolTip": "src\\Worker\\Workers\\ServiceBusWorker.cs",
-              "ViewState": "AgIAAC8AAAAAAAAAAAAmwD4AAAAAAAAAAAAAAA==",
+              "Title": "Program.cs",
+              "DocumentMoniker": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Program.cs",
+              "RelativeDocumentMoniker": "src\\Worker\\Program.cs",
+              "ToolTip": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Program.cs",
+              "RelativeToolTip": "src\\Worker\\Program.cs",
+              "ViewState": "AgIAAGYAAAAAAAAAAAAAAHIAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-08-25T17:20:46.615Z",
+              "WhenOpened": "2025-09-02T10:43:57.024Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
               "DocumentIndex": 1,
-              "Title": "PostgresDocumentRepository.cs",
-              "DocumentMoniker": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Data\\Repositories\\PostgresDocumentRepository.cs",
-              "RelativeDocumentMoniker": "src\\Worker\\Data\\Repositories\\PostgresDocumentRepository.cs",
-              "ToolTip": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Data\\Repositories\\PostgresDocumentRepository.cs",
-              "RelativeToolTip": "src\\Worker\\Data\\Repositories\\PostgresDocumentRepository.cs",
-              "ViewState": "AgIAAA0AAAAAAAAAAAArwBgAAAAnAAAAAAAAAA==",
+              "Title": "ServiceBusWorker.cs",
+              "DocumentMoniker": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Workers\\ServiceBusWorker.cs",
+              "RelativeDocumentMoniker": "src\\Worker\\Workers\\ServiceBusWorker.cs",
+              "ToolTip": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Workers\\ServiceBusWorker.cs",
+              "RelativeToolTip": "src\\Worker\\Workers\\ServiceBusWorker.cs",
+              "ViewState": "AgIAAEcAAAAAAAAAAAAiwFcAAAAlAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-08-25T17:20:26.687Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "Models.cs",
-              "DocumentMoniker": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Data\\Entities\\Models.cs",
-              "RelativeDocumentMoniker": "src\\Worker\\Data\\Entities\\Models.cs",
-              "ToolTip": "C:\\Users\\bobyc\\OneDrive\\Desktop\\dmsRnd\\bulkupload\\src\\Worker\\Data\\Entities\\Models.cs",
-              "RelativeToolTip": "src\\Worker\\Data\\Entities\\Models.cs",
-              "ViewState": "AgIAAAYAAAAAAAAAAAAAAA4AAAAqAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
-              "WhenOpened": "2025-08-25T17:10:11.662Z",
+              "WhenOpened": "2025-09-02T10:43:13.638Z",
               "EditorCaption": ""
             }
           ]

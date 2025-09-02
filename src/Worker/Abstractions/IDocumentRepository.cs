@@ -1,22 +1,23 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Worker.Data.Entities;
+﻿//using System;
+//using System.Collections.Generic;
+//using System.Linq;
+//using System.Text;
+//using System.Threading.Tasks;
+//using Worker.Data.Entities;
 
-namespace Worker.Abstractions
-{
-    public interface IDocumentRepository
-    {
-        Task<MetadataJob> GetOrCreateMetadataJobAsync(string correlationId, string sourcePath, string country, string appName);
-        Task EnsureJobStartedAsync(Guid jobId);
-        Task MarkJobCompletedAsync(Guid jobId);
-        Task MarkJobFailedAsync(Guid jobId, string reason);
-        Task AddDocumentsAsync(IEnumerable<DocumentEntity> docs);
-        Task<(IReadOnlyList<DocumentEntity> Docs, int TotalPending)> GetPendingByJobBatchAsync(Guid jobId, int skip, int take, CancellationToken ct);
-        Task UpdateDocumentStatusAsync(Guid id, DocumentStatus status, string? error = null);
-        Task IncrementJobCountersAsync(Guid jobId, bool success);
-        Task AddProductionRecordWithTagsAsync(Guid jobId, string fileGuid, string blobName, string extension, IDictionary<string, string> tags, CancellationToken ct);
-    }
-}
+//namespace Worker.Abstractions
+//{
+//    public interface IDocumentRepository
+//    {
+//        Task<MetadataJob> GetOrCreateJobAsync(Guid correlationId, string? sourcePath = null, CancellationToken ct = default);
+//        //Task<MetadataJob> GetOrCreateMetadataJobAsync(string correlationId, string sourcePath, string country, string appName);
+//        Task SetJobStartedAsync(Guid jobId, CancellationToken ct = default);
+//        Task SetJobCompletedAsync(Guid jobId, int success, int failed, string? reason = null, CancellationToken ct = default);
+//        Task SetJobFailedAsync(Guid jobId, string reason, CancellationToken ct = default);
+
+//        Task<IReadOnlyList<DocumentStagingRaw>> GetPendingStagingRowsAsync(Guid jobId, int take, CancellationToken ct = default);
+//        Task<int> CountPendingByJobAsync(Guid jobId, CancellationToken ct = default);
+//        Task UpdateStagingRowStatusAsync(Guid stagingId, string status, string? error, CancellationToken ct = default);
+//        Task SaveProductionDocumentAsync(ProductionDocumentEntity prod, IEnumerable<ProductionDocumentTag> tags, CancellationToken ct = default);
+//    }
+//}
