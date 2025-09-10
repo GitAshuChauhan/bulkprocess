@@ -5,19 +5,13 @@ namespace SftpToAzure
 {
     class Program
     {
-        /// <summary>
-        /// Main entry point for the application.
-        /// Configures and runs the SFTP to Azure Blob Storage transfer.
-        /// </summary>
         static async Task Main(string[] args)
         {
-            Console.WriteLine("--- SFTP to Azure Blob Storage Streaming Transfer ---");
+            Console.WriteLine("--- SFTP to Azure Blob Storage Transfer Utility ---");
 
-            // --- IMPORTANT ---
+            // --- Configuration ---
             // Replace these placeholder values with your actual configuration.
-            // For production applications, use a secure configuration provider
-            // like Azure Key Vault, appsettings.json, or environment variables.
-
+            // For production, use a secure configuration provider (e.g., Azure Key Vault).
             var sftpConfig = new SftpConfig
             {
                 Host = "sftp.example.com",
@@ -28,24 +22,39 @@ namespace SftpToAzure
 
             var azureBlobConfig = new AzureBlobConfig
             {
-                // It's highly recommended to use a connection string from a secure source.
                 ConnectionString = "DefaultEndpointsProtocol=https;AccountName=youraccount;AccountKey=yourkey;EndpointSuffix=core.windows.net",
                 ContainerName = "your-blob-container-name"
             };
 
-            // The full path to the source file on the SFTP server.
-            var remoteFilePath = "/path/to/your/10gb-file.dat";
+            var remoteFilePath = "/path/to/your/large-file.dat";
+            var blobFileName = "uploaded-large-file.dat";
 
-            // The desired name for the file once it's in Azure Blob Storage.
-            var blobFileName = "uploaded-file.dat";
+            // --- Choose Transfer Method ---
+            // Set to 'true' to use the new high-performance parallel transfer.
+            // Set to 'false' to use the original, memory-efficient single-stream transfer.
+            bool useParallelTransfer = true;
 
             try
             {
-                Console.WriteLine("Initializing transfer service...");
                 var uploader = new SftpToAzureBlobStreamingUploader(sftpConfig, azureBlobConfig);
 
-                Console.WriteLine($"Starting transfer of '{remoteFilePath}' to blob '{blobFileName}'...");
-                await uploader.TransferFileAsync(remoteFilePath, blobFileName);
+                if (useParallelTransfer)
+                {
+                    Console.WriteLine("Starting transfer using PARALLEL method...");
+                    // These are the settings for the parallel transfer.
+                    // - maxDegreeOfParallelism: How many chunks to upload at the same time. 8 is a good starting point.
+                    // - chunkSizeInMegabytes: The size of each chunk. Larger chunks are more efficient but use more memory. 20-100MB is typical.
+                    await uploader.TransferFileInParallelAsync(
+                        remoteFilePath,
+                        blobFileName,
+                        maxDegreeOfParallelism: 8,
+                        chunkSizeInMegabytes: 50);
+                }
+                else
+                {
+                    Console.WriteLine("Starting transfer using SINGLE-STREAM method...");
+                    await uploader.TransferFileAsync(remoteFilePath, blobFileName);
+                }
 
                 Console.WriteLine("--- Transfer completed successfully! ---");
             }
@@ -53,8 +62,7 @@ namespace SftpToAzure
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine($"--- An error occurred: {ex.Message} ---");
-                // The detailed exception is already printed by the uploader class.
-                // For a production app, you would log this to your logging system.
+                Console.WriteLine(ex.ToString()); // Print full exception for debugging
                 Console.ResetColor();
             }
         }

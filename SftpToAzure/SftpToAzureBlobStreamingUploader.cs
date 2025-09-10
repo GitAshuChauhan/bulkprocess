@@ -1,15 +1,18 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Renci.SshNet;
+using Renci.SshNet.Sftp;
 
 namespace SftpToAzure
 {
-    /// <summary>
-    /// A service to efficiently stream a file from an SFTP server to Azure Blob Storage.
-    /// </summary>
     public class SftpToAzureBlobStreamingUploader
     {
         private readonly SftpConfig _sftpConfig;
@@ -22,70 +25,140 @@ namespace SftpToAzure
         }
 
         /// <summary>
-        /// Downloads a file from the SFTP server and uploads it to Azure Blob Storage as a stream.
-        /// This method is highly memory-efficient as it does not load the entire file into memory.
+        /// Simple, low-memory single-stream transfer. Good for smaller files or when memory is highly constrained.
         /// </summary>
-        /// <param name="remoteFilePath">The full path to the file on the SFTP server.</param>
-        /// <param name="blobFileName">The name of the blob to create in Azure Storage.</param>
-        /// <returns>A Task representing the asynchronous operation.</returns>
         public async Task TransferFileAsync(string remoteFilePath, string blobFileName)
         {
-            // Establish a connection to the SFTP server.
-            // The 'using' statement ensures the connection is properly closed.
+            using var sftpClient = new SftpClient(_sftpConfig.Host, _sftpConfig.Port, _sftpConfig.Username, _sftpConfig.Password);
+            try
+            {
+                sftpClient.Connect();
+                using var sftpStream = sftpClient.OpenRead(remoteFilePath);
+
+                var blobServiceClient = new BlobServiceClient(_azureBlobConfig.ConnectionString);
+                var blobContainerClient = blobServiceClient.GetBlobContainerClient(_azureBlobConfig.ContainerName);
+                await blobContainerClient.CreateIfNotExistsAsync();
+                var blobClient = blobContainerClient.GetBlobClient(blobFileName);
+
+                await blobClient.UploadAsync(sftpStream, overwrite: true);
+            }
+            finally
+            {
+                if (sftpClient.IsConnected) sftpClient.Disconnect();
+            }
+        }
+
+        /// <summary>
+        /// High-performance parallel file transfer. This method reads file chunks in parallel from the SFTP server
+        /// and uploads them as blocks to Azure Blob Storage. It is the recommended approach for large files.
+        /// </summary>
+        public async Task TransferFileInParallelAsync(string remoteFilePath, string blobFileName, int maxDegreeOfParallelism = 8, int chunkSizeInMegabytes = 50)
+        {
+            var chunkSizeInBytes = chunkSizeInMegabytes * 1024 * 1024;
+
+            // Get a client for the Azure Blob.
+            var blobServiceClient = new BlobServiceClient(_azureBlobConfig.ConnectionString);
+            var blobContainerClient = blobServiceClient.GetBlobContainerClient(_azureBlobConfig.ContainerName);
+            await blobContainerClient.CreateIfNotExistsAsync();
+            var blobClient = blobContainerClient.GetBlobClient(blobFileName);
+
+            // Use a single SFTP client for all operations. SftpClient is thread-safe.
             using var sftpClient = new SftpClient(_sftpConfig.Host, _sftpConfig.Port, _sftpConfig.Username, _sftpConfig.Password);
 
             try
             {
-                Console.WriteLine("Connecting to SFTP server...");
                 sftpClient.Connect();
-                Console.WriteLine("Connected to SFTP server.");
+                Console.WriteLine("SFTP client connected.");
 
-                // Open a read stream to the remote file. This does not download the file yet.
-                // It provides a stream that we can read from on-demand.
-                using var sftpStream = sftpClient.OpenRead(remoteFilePath);
-                Console.WriteLine($"Opened read stream to remote file: {remoteFilePath}");
+                // Get the file size to calculate chunks.
+                var fileAttributes = sftpClient.GetAttributes(remoteFilePath);
+                var fileSize = fileAttributes.Size;
 
-                // Get a client for the specific blob in Azure Storage.
-                var blobServiceClient = new BlobServiceClient(_azureBlobConfig.ConnectionString);
-                var blobContainerClient = blobServiceClient.GetBlobContainerClient(_azureBlobConfig.ContainerName);
+                // Open the file on the SFTP server once to get a handle.
+                var fileHandle = sftpClient.Open(remoteFilePath, FileMode.Open, FileAccess.Read);
+                Console.WriteLine($"Remote file opened. Handle obtained. File size: {fileSize / (1024 * 1024)} MB");
 
-                // Ensure the container exists.
-                await blobContainerClient.CreateIfNotExistsAsync();
+                try
+                {
+                    var numChunks = (int)Math.Ceiling((double)fileSize / chunkSizeInBytes);
+                    var blockIds = new ConcurrentDictionary<int, string>();
+                    var uploadTasks = new List<Task>(numChunks);
 
-                var blobClient = blobContainerClient.GetBlobClient(blobFileName);
-                Console.WriteLine($"Got BlobClient for blob: {blobFileName}");
+                    // Use a semaphore to limit the number of concurrent tasks.
+                    using var semaphore = new SemaphoreSlim(maxDegreeOfParallelism);
 
-                Console.WriteLine("Starting upload to Azure Blob Storage...");
+                    Console.WriteLine($"Starting parallel upload in {numChunks} chunks with up to {maxDegreeOfParallelism} workers...");
 
-                // This is the key part of the operation.
-                // We pass the SFTP stream directly to the Azure Blob Storage SDK's UploadAsync method.
-                // The SDK intelligently reads from the source stream in chunks and uploads them as blocks
-                // to Azure Storage, without ever loading the entire 10 GB file into local memory.
-                // The `overwrite: true` parameter will replace the blob if it already exists.
-                await blobClient.UploadAsync(sftpStream, new BlobHttpHeaders { ContentType = "application/octet-stream" }, conditions: null);
+                    for (int i = 0; i < numChunks; i++)
+                    {
+                        await semaphore.WaitAsync(); // Wait for an available slot.
 
-                Console.WriteLine("Upload complete.");
-            }
-            catch (Exception ex)
-            {
-                // Log the exception details for troubleshooting.
-                Console.WriteLine($"An error occurred during the transfer: {ex.Message}");
-                Console.WriteLine(ex.ToString());
-                throw;
+                        var chunkIndex = i;
+
+                        uploadTasks.Add(Task.Run(async () =>
+                        {
+                            try
+                            {
+                                var offset = (long)chunkIndex * chunkSizeInBytes;
+                                var length = (int)Math.Min(chunkSizeInBytes, fileSize - offset);
+
+                                // This is the key operation: Read a specific chunk directly using the file handle.
+                                var buffer = sftpClient.ReadBytes(fileHandle, (ulong)offset, length);
+
+                                using var memoryStream = new MemoryStream(buffer);
+
+                                var blockId = Convert.ToBase64String(Encoding.UTF8.GetBytes(chunkIndex.ToString("d6")));
+                                await blobClient.StageBlockAsync(blockId, memoryStream);
+                                blockIds.TryAdd(chunkIndex, blockId);
+                                Console.WriteLine($"  - Chunk {chunkIndex + 1}/{numChunks} (Size: {length / 1024} KB) staged successfully.");
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[ERROR] Failed to process chunk {chunkIndex + 1}: {ex.Message}");
+                                throw; // Rethrow to fail the Task.WhenAll
+                            }
+                            finally
+                            {
+                                semaphore.Release(); // Release the slot.
+                            }
+                        }));
+                    }
+
+                    // Wait for all staging tasks to complete.
+                    await Task.WhenAll(uploadTasks);
+
+                    // Commit the staged blocks in the correct order to finalize the blob.
+                    if (blockIds.Count == numChunks)
+                    {
+                        Console.WriteLine("All chunks staged. Committing block list...");
+                        var sortedBlockIds = blockIds.OrderBy(kvp => kvp.Key).Select(kvp => kvp.Value);
+                        await blobClient.CommitBlockListAsync(sortedBlockIds);
+                        Console.WriteLine("Parallel upload complete!");
+                    }
+                    else
+                    {
+                        throw new Exception("Upload failed: Not all chunks were successfully staged.");
+                    }
+                }
+                finally
+                {
+                    // Ensure the file handle is closed.
+                    sftpClient.Close(fileHandle);
+                    Console.WriteLine("Remote file handle closed.");
+                }
             }
             finally
             {
-                // Disconnect from the SFTP server if the connection is open.
+                // Ensure the client is disconnected.
                 if (sftpClient.IsConnected)
                 {
                     sftpClient.Disconnect();
-                    Console.WriteLine("Disconnected from SFTP server.");
+                    Console.WriteLine("SFTP client disconnected.");
                 }
             }
         }
     }
 
-    // Configuration classes to hold connection details.
     public class SftpConfig
     {
         public string Host { get; set; }
