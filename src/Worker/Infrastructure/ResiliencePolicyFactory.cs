@@ -3,6 +3,7 @@ using Azure.Messaging.ServiceBus;
 using Microsoft.Extensions.Logging;
 using Polly;
 using Polly.Contrib.WaitAndRetry;
+using Polly.Retry;
 using Renci.SshNet.Common;
 using System;
 using System.Net.Sockets;
@@ -15,6 +16,7 @@ namespace Worker.Infrastructure
         public IAsyncPolicy BlobRetryPolicy { get; }
         public IAsyncPolicy ServiceBusRetryPolicy { get; }
         public IAsyncPolicy SftpRetryPolicy { get; }
+        public AsyncRetryPolicy FtpRetryPolicy { get; }
 
         public ResiliencePolicyFactory(ILogger<ResiliencePolicyFactory> logger)
         {
@@ -35,6 +37,19 @@ namespace Worker.Infrastructure
                 .Or<TimeoutException>()
                 .Or<SocketException>()
                 .WaitAndRetryAsync(delays, (ex, ts, r, ctx) => logger.LogWarning(ex, "SFTP transient, retry {Retry} after {Delay}", r, ts));
+
+            // Retry 5 times with exponential backoff for transient FTP errors
+            FtpRetryPolicy = Policy
+                .Handle<IOException>()
+                .Or<SocketException>()
+                .Or<TimeoutException>()
+                .WaitAndRetryAsync(
+                    retryCount: 5,
+                    sleepDurationProvider: attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)), // 2s, 4s, 8s...
+                    onRetry: (ex, ts, retry, ctx) =>
+                    {
+                        Console.WriteLine($"[FTP] Retry {retry} after {ts.TotalSeconds}s due to {ex.GetType().Name}: {ex.Message}");
+                    });
         }
     }
 }
